@@ -91,7 +91,7 @@ class BaseCommunicationGateway(Process):
     def _set_mission(self, mission: Mission):
         self._mission = mission
         self._log_message(LOG_DEBUG, f"получена новая задача: {self._mission}")
-        self._log_message(LOG_INFO, "получен новый маршрут, отправляем в получателям")
+        self._log_message(LOG_INFO, "получен новый маршрут, отправляем получателям")
         self._send_mission_to_consumers()
 
     @abstractmethod
