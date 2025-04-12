@@ -399,7 +399,6 @@ cargo_bay = CargoBay(queues_dir=queues_dir, log_level=LOG_INFO)
 safety_block = SafetyBlock(queues_dir=queues_dir, log_level=LOG_INFO)
 security = SecurityMonitor(queues_dir=queues_dir)
 
-
 # сборка всех запускаемых блоков в одном "кузове"
 system_components = SystemComponentsContainer(
 components=[
