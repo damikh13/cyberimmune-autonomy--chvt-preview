@@ -20,6 +20,8 @@ from src.sitl_mqtt import TelemetrySender
 from src.system_wrapper import SystemComponentsContainer
 from src.wpl_parser import WPLParser
 from src.mission_type import GeoSpecificSpeedLimit
+from src.tls_terminator import TLSTerminator
+from src.config import TLS_CERT_PATH, TLS_KEY_PATH
 
 class SecurityMonitor(BaseSecurityMonitor):
     """ класс монитора безопасности """
@@ -381,13 +383,17 @@ sitl = SITL(
     queues_dir=queues_dir, position=home,
     car_id=car_id, post_telemetry=afcs_present, log_level=LOG_ERROR)
 
+tls_terminator = TLSTerminator(
+    queues_dir=queues_dir, 
+    cert_path=TLS_CERT_PATH, 
+    key_path=TLS_KEY_PATH, 
+    log_level=LOG_INFO
+)
 communication_gateway = CommunicationGateway(
     queues_dir=queues_dir, log_level=LOG_ERROR)
 control_system = ControlSystem(queues_dir=queues_dir, log_level=LOG_INFO)
-
 navigation_system = NavigationSystem(
     queues_dir=queues_dir, log_level=LOG_ERROR)
-
 servos = Servos(queues_dir=queues_dir, log_level=LOG_ERROR)
 cargo_bay = CargoBay(queues_dir=queues_dir, log_level=LOG_INFO)
 safety_block = SafetyBlock(queues_dir=queues_dir, log_level=LOG_INFO)
@@ -405,6 +411,7 @@ components=[
         navigation_system,
         servos,
         cargo_bay,
+        tls_terminator,
         communication_gateway,
         control_system,
         safety_block,
@@ -416,6 +423,7 @@ components=[
         navigation_system,
         servos,
         cargo_bay,
+        tls_terminator,
         communication_gateway,
         control_system,
         safety_block,
