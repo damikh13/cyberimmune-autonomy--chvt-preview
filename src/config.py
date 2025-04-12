@@ -10,6 +10,7 @@ SITL_TELEMETRY_QUEUE_NAME = "sitl.mqtt"
 MISSION_SENDER_QUEUE_NAME = "planner.mqtt"
 SAFETY_BLOCK_QUEUE_NAME = "safety"
 SECURITY_MONITOR_QUEUE_NAME = "security"
+TLS_TERMINATOR_QUEUE_NAME = "tls_terminator"
 
 DEFAULT_LOG_LEVEL = 2  # 1 - errors, 2 - verbose, 3 - debug
 LOG_FAILURE = 0
@@ -19,3 +20,6 @@ LOG_DEBUG = 3
 CRITICALITY_STR = [
     "ОТКАЗ", "ОШИБКА", "ИНФО", "ОТЛАДКА"
 ]
+
+TLS_CERT_PATH = "certs/server.crt"
+TLS_KEY_PATH = "certs/server.key"
