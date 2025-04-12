@@ -36,11 +36,15 @@ class TLSTerminator(Process):
     event_q_name = event_source_name
     log_level = DEFAULT_LOG_LEVEL
 
-    def __init__(self, queues_dir: QueuesDirectory, cert_path: str = None, key_path: str = None):
+    def __init__(self, queues_dir: QueuesDirectory, cert_path: str = None, 
+                key_path: str = None, log_level: int = DEFAULT_LOG_LEVEL):
         # Call parent constructor
         super().__init__()
 
         self._queues_dir = queues_dir
+        
+        # Set the log level
+        self.log_level = log_level
 
         # Create queue for processing messages
         self._events_q = Queue()
@@ -68,64 +72,7 @@ class TLSTerminator(Process):
         # Session keys cache for different connections
         self._session_keys = {}
         
-        # Register security policies for this component
-        self._register_security_policies()
-        
         self._log_message(LOG_INFO, "TLS Terminator created")
-    def _init_ssl_context(self):
-        """Initialize SSL context with proper configuration"""
-        if not self._cert_path or not self._key_path:
-            self._log_message(LOG_INFO, "Certificate paths not provided, using default configuration")
-            return None
-            
-        try:
-            context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            context.load_cert_chain(certfile=self._cert_path, keyfile=self._key_path)
-            context.verify_mode = ssl.CERT_REQUIRED
-            context.check_hostname = True
-            context.load_default_certs()
-            
-            # Set secure protocol and cipher preferences
-            context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1  # Disable TLS 1.0 and 1.1
-            context.set_ciphers('ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384')
-            
-            self._log_message(LOG_INFO, "SSL context initialized successfully")
-            return context
-        except Exception as e:
-            self._log_message(LOG_ERROR, f"Failed to initialize SSL context: {e}")
-            return None
-    def _register_security_policies(self):
-        """Register security policies for TLS Terminator"""
-        security_monitor_q = self._queues_dir.get_queue(SECURITY_MONITOR_QUEUE_NAME)
-        
-        # Define security policies for TLS Terminator
-        policies = [
-            SecurityPolicy(
-                source=PLANNER_QUEUE_NAME,
-                destination=TLS_TERMINATOR_QUEUE_NAME,
-                operation='set_mission'
-            ),
-            SecurityPolicy(
-                source=TLS_TERMINATOR_QUEUE_NAME,
-                destination=COMMUNICATION_GATEWAY_QUEUE_NAME,
-                operation='set_mission'
-            ),
-            # Additional policies as needed
-        ]
-        
-        # Send policies to security monitor
-        security_policy_event = Event(
-            source=TLS_TERMINATOR_QUEUE_NAME,
-            destination=SECURITY_MONITOR_QUEUE_NAME,
-            operation="add_security_policies",
-            parameters=policies
-        )
-        
-        try:
-            security_monitor_q.put(security_policy_event)
-            self._log_message(LOG_INFO, "Security policies registered")
-        except Exception as e:
-            self._log_message(LOG_ERROR, f"Failed to register security policies: {e}")
     def _log_message(self, criticality: int, message: str):
         """Print log message with specified criticality level
 

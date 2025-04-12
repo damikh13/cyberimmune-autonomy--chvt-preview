@@ -92,7 +92,17 @@ class SecurityMonitor(BaseSecurityMonitor):
                 source=CONTROL_SYSTEM_QUEUE_NAME,  # "control"
                 destination=SAFETY_BLOCK_QUEUE_NAME,  # "safety"
                 operation='lock_cargo'
-            )
+            ),
+            SecurityPolicy(
+                source=PLANNER_QUEUE_NAME,
+                destination=TLS_TERMINATOR_QUEUE_NAME,
+                operation='set_mission'
+            ),
+            SecurityPolicy(
+                source=TLS_TERMINATOR_QUEUE_NAME,
+                destination=COMMUNICATION_GATEWAY_QUEUE_NAME,
+                operation='set_mission'
+            ),
         ]
         self.set_security_policies(policies=default_policies)        
     def set_security_policies(self, policies):
