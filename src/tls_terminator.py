@@ -73,6 +73,28 @@ class TLSTerminator(Process):
         self._session_keys = {}
         
         self._log_message(LOG_INFO, "TLS Terminator created")
+    def _init_ssl_context(self):
+        """Initialize SSL context with proper configuration"""
+        if not self._cert_path or not self._key_path:
+            self._log_message(LOG_INFO, "Certificate paths not provided, using default configuration")
+            return None
+            
+        try:
+            context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            context.load_cert_chain(certfile=self._cert_path, keyfile=self._key_path)
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.check_hostname = True
+            context.load_default_certs()
+            
+            # Set secure protocol and cipher preferences
+            context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1  # Disable TLS 1.0 and 1.1
+            context.set_ciphers('ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384')
+            
+            self._log_message(LOG_INFO, "SSL context initialized successfully")
+            return context
+        except Exception as e:
+            self._log_message(LOG_ERROR, f"Failed to initialize SSL context: {e}")
+            return None
     def _log_message(self, criticality: int, message: str):
         """Print log message with specified criticality level
 
