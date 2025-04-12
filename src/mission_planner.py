@@ -125,23 +125,22 @@ class MissionPlanner(Process):
                 LOG_ERROR, f"ошибка отправки миссии по mqtt: {e}")
 
     def _send_mission_to_communication_gateway(self):
-        communication_q_name = "communication"
+        tls_terminator_q_name = "tls_terminator"
         event = Event(source=MissionPlanner.event_source_name,
-                      destination=communication_q_name,
-                      operation="set_mission", parameters=self._mission
-                      )
-        communication_q: Queue = self._queues_dir.get_queue(
-            communication_q_name)
+                    destination=tls_terminator_q_name,
+                    operation="set_mission", parameters=self._mission
+                    )
+        tls_terminator_q: Queue = self._queues_dir.get_queue(
+            tls_terminator_q_name)
         try:
-            communication_q.put(event)
+            tls_terminator_q.put(event)
             self._log_message(
-                LOG_INFO, "новая задача отправлена в коммуникационный шлюз")
+                LOG_INFO, "новая задача отправлена в TLS терминатор")
         except Exception as e:
             self._log_message(
-                LOG_ERROR, f"ошибка отправки задачи в коммуникационный шлюз: {e}")
-
+                LOG_ERROR, f"ошибка отправки задачи в TLS терминатор: {e}")
+            
     # проверка наличия новых управляющих команд
-
     def _check_control_q(self):
         try:
             request: ControlEvent = self._control_q.get_nowait()
