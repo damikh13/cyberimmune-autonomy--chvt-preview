@@ -8,3 +8,5 @@ tests/e2e/*.wpl
 *.wpl
 cyberimmunity--autonomous-car*.pdf
 out
+certs/*.key
+certs/*.crt
