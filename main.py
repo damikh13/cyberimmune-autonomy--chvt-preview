@@ -89,8 +89,8 @@ class SecurityMonitor(BaseSecurityMonitor):
                 destination=SAFETY_BLOCK_QUEUE_NAME,
                 operation="release_cargo"),
             SecurityPolicy(
-                source=CONTROL_SYSTEM_QUEUE_NAME,  # "control"
-                destination=SAFETY_BLOCK_QUEUE_NAME,  # "safety"
+                source=CONTROL_SYSTEM_QUEUE_NAME,
+                destination=SAFETY_BLOCK_QUEUE_NAME,
                 operation='lock_cargo'
             ),
             SecurityPolicy(
@@ -367,9 +367,9 @@ points = parser.parse()
 
 # обновите скоростные ограничения для вашего маршрута!
 speed_limits = [
-    GeoSpecificSpeedLimit(0, 60),
-    GeoSpecificSpeedLimit(19, 110),
-    GeoSpecificSpeedLimit(26, 60),
+    GeoSpecificSpeedLimit(0, 20),
+    GeoSpecificSpeedLimit(3, 60),
+    GeoSpecificSpeedLimit(6, 20),
 ]
 
 home = points[0]
@@ -441,7 +441,7 @@ components=[
 
 system_components.start()
 
-sleep(160)
+sleep(180)
 
 system_components.stop()
 
