@@ -360,7 +360,7 @@ navigation_system = NavigationSystem(queues_dir=queues_dir)
 
 afcs_present = True
 car_id = "m5"
-wpl_file = "module2.wpl"
+wpl_file = "main.wpl"
 
 parser = WPLParser(wpl_file)    
 points = parser.parse()
@@ -441,7 +441,8 @@ components=[
 
 system_components.start()
 
-sleep(180)
+# sleep(180)
+sleep(42)
 
 system_components.stop()
 
