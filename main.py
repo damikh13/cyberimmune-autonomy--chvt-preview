@@ -427,6 +427,8 @@ components=[
         security
     ] if afcs_present else [
         # вариант компонентов для конфигурации без СУПА
+        mission_sender,
+        telemetry_sender,
         sitl,
         mission_planner,
         navigation_system,
@@ -442,7 +444,7 @@ components=[
 system_components.start()
 
 # sleep(180)
-sleep(42)
+sleep(44)
 
 system_components.stop()
 

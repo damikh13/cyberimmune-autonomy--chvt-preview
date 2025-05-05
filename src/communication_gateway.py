@@ -46,7 +46,13 @@ class BaseCommunicationGateway(Process):
         self._log_message(LOG_INFO, "Компонент связи создан")
 
     def _log_message(self, criticality: int, message: str):
-        if criticality <= self.log_level:
+        """_log_message печатает сообщение заданного уровня критичности
+
+        Args:
+            criticality (int): уровень критичности
+            message (str): текст сообщения
+        """
+        if criticality <= self.log_level + 1:
             print(f"[{CRITICALITY_STR[criticality]}]{self.log_prefix} {message}")
 
     def _initialize_cipher_key(self) -> bytes:
@@ -63,40 +69,40 @@ class BaseCommunicationGateway(Process):
         try:
             decrypted = self._cipher.decrypt(encrypted_data)
             mission = pickle.loads(decrypted)
-            self._log_message(LOG_DEBUG, "Задание дешифровано")
+            self._log_message(LOG_INFO, "Задание дешифровано")
             return mission
         except Exception as e:
             self._log_message(LOG_ERROR, f"Ошибка при дешифровании: {e}")
             raise
 
-    def _ensure_waypoints_are_geopoints(self, mission: Mission) -> Mission:
-        """Проверяет и преобразует точки waypoints в GeoPoint если необходимо"""
-        if not hasattr(mission, 'waypoints') or not mission.waypoints:
-            self._log_message(LOG_ERROR, "Миссия не содержит точек маршрута")
-            return mission
+    # def _ensure_waypoints_are_geopoints(self, mission: Mission) -> Mission:
+    #     """Проверяет и преобразует точки waypoints в GeoPoint если необходимо"""
+    #     if not hasattr(mission, 'waypoints') or not mission.waypoints:
+    #         self._log_message(LOG_ERROR, "Миссия не содержит точек маршрута")
+    #         return mission
             
-        for i, wp in enumerate(mission.waypoints):
-            # Если точка не является GeoPoint, но имеет атрибуты latitude и longitude
-            if not isinstance(wp, GeoPoint):
-                try:
-                    if hasattr(wp, 'latitude') and hasattr(wp, 'longitude'):
-                        # Создаем новый GeoPoint из существующих координат
-                        mission.waypoints[i] = GeoPoint(latitude=wp.latitude, longitude=wp.longitude)
-                        self._log_message(LOG_INFO, f"Точка {i} преобразована в GeoPoint: {mission.waypoints[i]}")
-                    elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
-                        # Если точка - список или кортеж координат
-                        mission.waypoints[i] = GeoPoint(latitude=wp[0], longitude=wp[1])
-                        self._log_message(LOG_INFO, f"Точка {i} (список/кортеж) преобразована в GeoPoint: {mission.waypoints[i]}")
-                    elif hasattr(wp, '__getitem__') and 'latitude' in wp and 'longitude' in wp:
-                        # Если точка - словарь или объект с доступом по ключу
-                        mission.waypoints[i] = GeoPoint(latitude=wp['latitude'], longitude=wp['longitude'])
-                        self._log_message(LOG_INFO, f"Точка {i} (словарь) преобразована в GeoPoint: {mission.waypoints[i]}")
-                    else:
-                        self._log_message(LOG_ERROR, f"Невозможно преобразовать точку {i}: {wp} (тип {type(wp)})")
-                except Exception as e:
-                    self._log_message(LOG_ERROR, f"Ошибка при преобразовании точки {i}: {e}")
+    #     for i, wp in enumerate(mission.waypoints):
+    #         # Если точка не является GeoPoint, но имеет атрибуты latitude и longitude
+    #         if not isinstance(wp, GeoPoint):
+    #             try:
+    #                 if hasattr(wp, 'latitude') and hasattr(wp, 'longitude'):
+    #                     # Создаем новый GeoPoint из существующих координат
+    #                     mission.waypoints[i] = GeoPoint(latitude=wp.latitude, longitude=wp.longitude)
+    #                     self._log_message(LOG_INFO, f"Точка {i} преобразована в GeoPoint: {mission.waypoints[i]}")
+    #                 elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
+    #                     # Если точка - список или кортеж координат
+    #                     mission.waypoints[i] = GeoPoint(latitude=wp[0], longitude=wp[1])
+    #                     self._log_message(LOG_INFO, f"Точка {i} (список/кортеж) преобразована в GeoPoint: {mission.waypoints[i]}")
+    #                 elif hasattr(wp, '__getitem__') and 'latitude' in wp and 'longitude' in wp:
+    #                     # Если точка - словарь или объект с доступом по ключу
+    #                     mission.waypoints[i] = GeoPoint(latitude=wp['latitude'], longitude=wp['longitude'])
+    #                     self._log_message(LOG_INFO, f"Точка {i} (словарь) преобразована в GeoPoint: {mission.waypoints[i]}")
+    #                 else:
+    #                     self._log_message(LOG_ERROR, f"Невозможно преобразовать точку {i}: {wp} (тип {type(wp)})")
+    #             except Exception as e:
+    #                 self._log_message(LOG_ERROR, f"Ошибка при преобразовании точки {i}: {e}")
         
-        return mission
+    #     return mission
 
     def _handle_event(self, event: Event):
         if event.operation == "set_mission":
@@ -104,7 +110,7 @@ class BaseCommunicationGateway(Process):
                 mission = self._decrypt_mission(event.parameters)
                 
                 # Проверяем и преобразуем точки в GeoPoint если необходимо
-                mission = self._ensure_waypoints_are_geopoints(mission)
+                # mission = self._ensure_waypoints_are_geopoints(mission)
                 self._mission = mission
                 
                 # Подробный лог о миссии после обработки
@@ -199,7 +205,6 @@ class BaseCommunicationGateway(Process):
     def run(self):
         self._log_message(LOG_INFO, "Компонент связи запущен")
         while not self._quit:
-            sleep(0.1)
             self._check_events_q()
             self._check_control_q()
         self._log_message(LOG_INFO, "Компонент связи остановлен")
