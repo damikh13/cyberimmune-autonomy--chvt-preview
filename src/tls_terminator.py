@@ -9,7 +9,7 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 
 from src.config import (
-    CRITICALITY_STR, LOG_DEBUG, LOG_ERROR, LOG_INFO,
+    CRITICALITY_STR, LOG_ERROR, LOG_INFO,
     DEFAULT_LOG_LEVEL,
     TLS_TERMINATOR_QUEUE_NAME,
     COMMUNICATION_GATEWAY_QUEUE_NAME,
@@ -20,7 +20,7 @@ from src.mission_type import Mission
 
 
 class TLSTerminator(Process):
-    """Безопасный TLS-прокси между планировщиком и связью с шифрованием."""
+    """TLS-терминатор между планировщиком и связью с дешифрованием данных."""
 
     log_prefix = "[TLS TERMINATOR]"
     event_q_name = TLS_TERMINATOR_QUEUE_NAME
@@ -66,41 +66,45 @@ class TLSTerminator(Process):
             self._log_message(LOG_ERROR, f"Ошибка инициализации ключа: {e}")
             return Fernet.generate_key()
 
-    def _encrypt_mission(self, mission: Mission) -> bytes:
+    def _decrypt_mission(self, encrypted_data: bytes) -> Mission:
+        """Расшифровывает маршрутное задание"""
         try:
-            
-            # Используем высокий протокол для сохранения всех типов данных
-            data = pickle.dumps(mission, protocol=pickle.HIGHEST_PROTOCOL)
-            encrypted = self._cipher.encrypt(data)
-            self._log_message(LOG_DEBUG, "Задание зашифровано")
-            return encrypted
+            decrypted = self._cipher.decrypt(encrypted_data)
+            mission = pickle.loads(decrypted)
+            self._log_message(LOG_INFO, "Задание расшифровано")
+            return mission
         except Exception as e:
-            self._log_message(LOG_ERROR, f"Ошибка при шифровании: {e}")
+            self._log_message(LOG_ERROR, f"Ошибка при расшифровке: {e}")
             raise
 
     def _process_event(self, event: Event):
-        self._log_message(LOG_DEBUG, f"Обработка события: {event}")
+        self._log_message(LOG_INFO, f"Обработка события: {event}")
         if event.operation == "set_mission":
             self._forward_mission_to_communication_gateway(event.parameters)
         else:
             self._log_message(LOG_ERROR, f"Неизвестная операция: {event.operation}")
 
-    def _forward_mission_to_communication_gateway(self, mission: Mission):
+    def _forward_mission_to_communication_gateway(self, encrypted_mission: bytes):
         try:
-            # Проверяем содержимое миссии и логируем его
-            self._log_message(LOG_INFO, f"Пересылаем задание: {mission}")
+            # Расшифровываем задание
+            mission = self._decrypt_mission(encrypted_mission)
             
-            encrypted = self._encrypt_mission(mission)
+            # Проверяем содержимое миссии и логируем его
+            self._log_message(LOG_INFO, f"Расшифрованное задание: {mission}")
+            
+            # Создаем событие с расшифрованными данными
             event = Event(
                 source=self.event_q_name,
                 destination=COMMUNICATION_GATEWAY_QUEUE_NAME,
                 operation="set_mission",
-                parameters=encrypted,
+                parameters=mission,
             )
+            
+            # Получаем очередь Communication Gateway и отправляем
             comm_q = self._queues_dir.get_queue(COMMUNICATION_GATEWAY_QUEUE_NAME)
             if comm_q:
                 comm_q.put(event)
-                self._log_message(LOG_INFO, "Задание передано в Communication Gateway")
+                self._log_message(LOG_INFO, "Расшифрованное задание передано в Communication Gateway")
             else:
                 self._log_message(LOG_ERROR, "Очередь Communication Gateway не найдена")
         except Exception as e:

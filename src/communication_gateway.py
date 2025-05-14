@@ -1,12 +1,9 @@
-import pickle
 from multiprocessing import Process, Queue
 from queue import Empty
 from time import sleep
 from pathlib import Path
 from typing import Optional
 from geopy import Point as GeoPoint
-
-from cryptography.fernet import Fernet
 
 from src.config import (
     COMMUNICATION_GATEWAY_QUEUE_NAME,
@@ -22,11 +19,10 @@ from src.mission_type import Mission
 
 
 class BaseCommunicationGateway(Process):
-    """Компонент связи, получающий и расшифровывающий зашифрованные маршрутные задания"""
+    """Компонент связи, получающий расшифрованные маршрутные задания от TLS терминатора"""
 
     log_prefix = "[COMMUNICATION]"
     events_q_name = COMMUNICATION_GATEWAY_QUEUE_NAME
-    SECRET_KEY_PATH = "secret_key"
 
     def __init__(self, queues_dir: QueuesDirectory, log_level=DEFAULT_LOG_LEVEL):
         super().__init__()
@@ -35,9 +31,6 @@ class BaseCommunicationGateway(Process):
 
         self._events_q = Queue()
         self._queues_dir.register(self._events_q, name=self.events_q_name)
-
-        self._cipher_key = self._initialize_cipher_key()
-        self._cipher = Fernet(self._cipher_key)
 
         self._control_q = Queue()
         self._quit = False
@@ -55,66 +48,15 @@ class BaseCommunicationGateway(Process):
         if criticality <= self.log_level + 1:
             print(f"[{CRITICALITY_STR[criticality]}]{self.log_prefix} {message}")
 
-    def _initialize_cipher_key(self) -> bytes:
-        try:
-            with open(self.SECRET_KEY_PATH, 'rb') as f:
-                key = f.read()
-                self._log_message(LOG_INFO, "Ключ дешифрования загружен")
-                return key
-        except Exception as e:
-            self._log_message(LOG_ERROR, f"Ошибка загрузки ключа: {e}")
-            raise
-
-    def _decrypt_mission(self, encrypted_data: bytes) -> Mission:
-        try:
-            decrypted = self._cipher.decrypt(encrypted_data)
-            mission = pickle.loads(decrypted)
-            self._log_message(LOG_INFO, "Задание дешифровано")
-            return mission
-        except Exception as e:
-            self._log_message(LOG_ERROR, f"Ошибка при дешифровании: {e}")
-            raise
-
-    # def _ensure_waypoints_are_geopoints(self, mission: Mission) -> Mission:
-    #     """Проверяет и преобразует точки waypoints в GeoPoint если необходимо"""
-    #     if not hasattr(mission, 'waypoints') or not mission.waypoints:
-    #         self._log_message(LOG_ERROR, "Миссия не содержит точек маршрута")
-    #         return mission
-            
-    #     for i, wp in enumerate(mission.waypoints):
-    #         # Если точка не является GeoPoint, но имеет атрибуты latitude и longitude
-    #         if not isinstance(wp, GeoPoint):
-    #             try:
-    #                 if hasattr(wp, 'latitude') and hasattr(wp, 'longitude'):
-    #                     # Создаем новый GeoPoint из существующих координат
-    #                     mission.waypoints[i] = GeoPoint(latitude=wp.latitude, longitude=wp.longitude)
-    #                     self._log_message(LOG_INFO, f"Точка {i} преобразована в GeoPoint: {mission.waypoints[i]}")
-    #                 elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
-    #                     # Если точка - список или кортеж координат
-    #                     mission.waypoints[i] = GeoPoint(latitude=wp[0], longitude=wp[1])
-    #                     self._log_message(LOG_INFO, f"Точка {i} (список/кортеж) преобразована в GeoPoint: {mission.waypoints[i]}")
-    #                 elif hasattr(wp, '__getitem__') and 'latitude' in wp and 'longitude' in wp:
-    #                     # Если точка - словарь или объект с доступом по ключу
-    #                     mission.waypoints[i] = GeoPoint(latitude=wp['latitude'], longitude=wp['longitude'])
-    #                     self._log_message(LOG_INFO, f"Точка {i} (словарь) преобразована в GeoPoint: {mission.waypoints[i]}")
-    #                 else:
-    #                     self._log_message(LOG_ERROR, f"Невозможно преобразовать точку {i}: {wp} (тип {type(wp)})")
-    #             except Exception as e:
-    #                 self._log_message(LOG_ERROR, f"Ошибка при преобразовании точки {i}: {e}")
-        
-    #     return mission
-
     def _handle_event(self, event: Event):
         if event.operation == "set_mission":
             try:
-                mission = self._decrypt_mission(event.parameters)
-                
-                # Проверяем и преобразуем точки в GeoPoint если необходимо
-                # mission = self._ensure_waypoints_are_geopoints(mission)
+                # Теперь получаем уже расшифрованную миссию
+                mission = event.parameters
                 self._mission = mission
                 
-                # Подробный лог о миссии после обработки
-                self._log_message(LOG_INFO, f"Mission после обработки: {mission}")
+                # Подробный лог о миссии
+                self._log_message(LOG_INFO, f"Получена расшифрованная миссия: {mission}")
                 
                 # Проверка содержимого waypoints
                 if not isinstance(mission.waypoints, list):

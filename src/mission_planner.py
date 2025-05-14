@@ -1,13 +1,19 @@
-""" модуль работы с маршрутным заданием
+""" модуль работы с маршрутным заданием со встроенным шифрованием
 """
 from time import sleep
 from queue import Empty
 from typing import Optional, List
 from multiprocessing import Queue, Process
 from geopy import Point
+import pickle
+import os
+from pathlib import Path
+
+from cryptography.fernet import Fernet
 
 from src.config import CRITICALITY_STR, LOG_DEBUG, \
-    LOG_ERROR, LOG_INFO, PLANNER_QUEUE_NAME, DEFAULT_LOG_LEVEL, MISSION_SENDER_QUEUE_NAME
+    LOG_ERROR, LOG_INFO, PLANNER_QUEUE_NAME, DEFAULT_LOG_LEVEL, MISSION_SENDER_QUEUE_NAME, \
+    TLS_TERMINATOR_QUEUE_NAME
 from src.queues_dir import QueuesDirectory
 from src.event_types import Event, ControlEvent
 from src.mission_type import Mission
@@ -16,11 +22,13 @@ from src.mission_type import Mission
 class MissionPlanner(Process):
     """MissionPlanner обработчик и хранитель маршрутного задания
        как и остальные компоненты работает в отдельном процессе
+       теперь также шифрует маршрутные задания перед отправкой в TLS терминатор
     """
     log_prefix = "[MISSION PLANNER]"
     event_source_name = PLANNER_QUEUE_NAME
     event_q_name = event_source_name
     log_level = DEFAULT_LOG_LEVEL
+    SECRET_KEY_PATH = "secret_key"
 
     def __init__(
             self, queues_dir: QueuesDirectory, afcs_present: bool = False, mission: Mission = None):
@@ -45,6 +53,10 @@ class MissionPlanner(Process):
         # (нужно ли отправлять туда маршрутное задание)
         self._is_afcs_present = afcs_present
 
+        # инициализация ключа шифрования
+        self._cipher_key = self._initialize_cipher_key()
+        self._cipher = Fernet(self._cipher_key)
+
         # маршрут для движения
         self._mission: Optional[Mission] = None
 
@@ -52,7 +64,39 @@ class MissionPlanner(Process):
             # устанавливаем правильным образом
             self.set_new_mission(mission)
 
-        self._log_message(LOG_INFO, "создана система планирования заданий")
+        self._log_message(LOG_INFO, "создана система планирования заданий с шифрованием")
+
+    def _initialize_cipher_key(self) -> bytes:
+        """Инициализация ключа шифрования"""
+        path = Path(self.SECRET_KEY_PATH)
+        try:
+            if path.exists():
+                with open(path, 'rb') as f:
+                    key = f.read()
+                    self._log_message(LOG_INFO, "Загружен существующий ключ")
+            else:
+                key = Fernet.generate_key()
+                with open(path, 'wb') as f:
+                    f.write(key)
+                self._log_message(LOG_INFO, "Создан и сохранён новый ключ")
+            return key
+        except Exception as e:
+            self._log_message(LOG_ERROR, f"Ошибка инициализации ключа: {e}")
+            return Fernet.generate_key()
+
+    def _encrypt_mission(self, mission: Mission) -> bytes:
+        """Шифрует маршрутное задание"""
+        try:
+            # Используем высокий протокол для сохранения всех типов данных
+            # print(mission)
+            data = pickle.dumps(mission, protocol=pickle.HIGHEST_PROTOCOL)
+            encrypted = self._cipher.encrypt(data)
+            self._log_message(LOG_INFO, "Задание зашифровано")
+            # print(encrypted)
+            return encrypted
+        except Exception as e:
+            self._log_message(LOG_ERROR, f"Ошибка при шифровании: {e}")
+            raise
 
     def _log_message(self, criticality: int, message: str):
         """_log_message печатает сообщение заданного уровня критичности
@@ -125,20 +169,24 @@ class MissionPlanner(Process):
                 LOG_ERROR, f"ошибка отправки миссии по mqtt: {e}")
 
     def _send_mission_to_communication_gateway(self):
-        tls_terminator_q_name = "tls_terminator"
-        event = Event(source=MissionPlanner.event_source_name,
-                    destination=tls_terminator_q_name,
-                    operation="set_mission", parameters=self._mission
-                    )
-        tls_terminator_q: Queue = self._queues_dir.get_queue(
-            tls_terminator_q_name)
+        """Шифрует и отправляет задание в TLS терминатор"""
         try:
+            # Шифруем задание
+            encrypted_mission = self._encrypt_mission(self._mission)
+            
+            # Создаем событие с зашифрованными данными
+            event = Event(source=MissionPlanner.event_source_name,
+                        destination=TLS_TERMINATOR_QUEUE_NAME,
+                        operation="set_mission", parameters=encrypted_mission
+                        )
+                        
+            # Получаем очередь TLS терминатора и отправляем событие
+            tls_terminator_q: Queue = self._queues_dir.get_queue(TLS_TERMINATOR_QUEUE_NAME)
             tls_terminator_q.put(event)
-            self._log_message(
-                LOG_INFO, "новая задача отправлена в TLS терминатор")
+            
+            self._log_message(LOG_INFO, "зашифрованная задача отправлена в TLS терминатор")
         except Exception as e:
-            self._log_message(
-                LOG_ERROR, f"ошибка отправки задачи в TLS терминатор: {e}")
+            self._log_message(LOG_ERROR, f"ошибка отправки зашифрованной задачи в TLS терминатор: {e}")
             
     # проверка наличия новых управляющих команд
     def _check_control_q(self):

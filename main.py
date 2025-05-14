@@ -444,7 +444,7 @@ components=[
 system_components.start()
 
 # sleep(180)
-sleep(44)
+sleep(43.5)
 
 system_components.stop()
 
