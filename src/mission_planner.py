@@ -21,6 +21,7 @@ from cryptography.x509.oid import ExtensionOID
 from cryptography.hazmat.primitives.asymmetric import padding
 import datetime
 import json
+import base64
 
 class MissionPlanner(Process):
     """MissionPlanner обработчик и хранитель маршрутного задания
@@ -31,7 +32,6 @@ class MissionPlanner(Process):
     event_source_name = PLANNER_QUEUE_NAME
     event_q_name = event_source_name
     log_level = DEFAULT_LOG_LEVEL
-    SECRET_KEY_PATH = "secret_key"
     TRUSTED_ROOT_CERT = "certs/ca_root.crt"
     CLIENT_SECRET_C = 3
 
@@ -58,13 +58,14 @@ class MissionPlanner(Process):
         # (нужно ли отправлять туда маршрутное задание)
         self._is_afcs_present = afcs_present
 
-        # инициализация ключа шифрования
-        self._cipher_key = self._initialize_cipher_key()
-        self._cipher = Fernet(self._cipher_key)
+        self._pending_missions = []
+        self._server_public_key = None
+        self._ssl_connection_established = False
+
+        self._cipher: Optional[Fernet] = None
 
         # инициализация SSL-соединения с TLS терминатором
         self._initialize_ssl_connection()
-        self._server_public_key = None
 
         with open(self.TRUSTED_ROOT_CERT, "rb") as f:
             self._trusted_root = x509.load_pem_x509_certificate(f.read())
@@ -74,28 +75,10 @@ class MissionPlanner(Process):
         self._mission: Optional[Mission] = None
 
         if mission is not None:
-            # устанавливаем правильным образом
-            self.set_new_mission(mission)
+            # если есть маршрутное задание, устанавливаем его
+            self._set_mission(mission)
 
         self._log_message(LOG_INFO, "создана система планирования заданий с шифрованием")
-
-    def _initialize_cipher_key(self) -> bytes:
-        """Инициализация ключа шифрования"""
-        path = Path(self.SECRET_KEY_PATH)
-        try:
-            if path.exists():
-                with open(path, 'rb') as f:
-                    key = f.read()
-                    self._log_message(LOG_INFO, "Загружен существующий ключ")
-            else:
-                key = Fernet.generate_key()
-                with open(path, 'wb') as f:
-                    f.write(key)
-                self._log_message(LOG_INFO, "Создан и сохранён новый ключ")
-            return key
-        except Exception as e:
-            self._log_message(LOG_ERROR, f"Ошибка инициализации ключа: {e}")
-            return Fernet.generate_key()
 
     def _initialize_ssl_connection(self):
         # send client_hello to TLS terminator
@@ -155,7 +138,6 @@ class MissionPlanner(Process):
         # server_public_key = cert.public_key()
         self._server_public_key = cert.public_key()
     def _process_server_key_exchange(self, key_exchange_message):
-        print('\n'*5)
         self._log_message(LOG_INFO, "получен server_key_exchange от TLS терминатора")
         
         payload = key_exchange_message["payload"]
@@ -183,11 +165,19 @@ class MissionPlanner(Process):
         c = self.CLIENT_SECRET_C
         C = P1**c % P2
         K = S**c % P2
+
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(K.to_bytes((K.bit_length()+7)//8, byteorder="big"))
+        sym_key = digest.finalize()              # 32 bytes
+
+        fernet_key = base64.urlsafe_b64encode(sym_key)
+        self._cipher = Fernet(fernet_key)
+
         self._log_message(LOG_INFO, f"client secret C: {C}, shared secret K: {K}")
 
         # encrypt the calculated C with the server's public key
         C_bytes = C.to_bytes((C.bit_length() + 7)//8, byteorder="big")
-        encrypted_C = self._server_pubkey.encrypt(
+        encrypted_C = self._server_public_key.encrypt(
             C_bytes,
             padding.OAEP(
                 mgf=padding.MGF1(hashes.SHA256()),
@@ -210,7 +200,14 @@ class MissionPlanner(Process):
         tls_terminator_q: Queue = self._queues_dir.get_queue(TLS_TERMINATOR_QUEUE_NAME)
         tls_terminator_q.put(event)
         self._log_message(LOG_INFO, "отправлен client_key_exchange в TLS терминатор")
-        print('\n'*5)
+    def _process_finish_handshake(self, finish_handshake_message):
+        self._log_message(LOG_INFO, "получен finish_handshake от TLS терминатора")
+        
+        self._ssl_connection_established = True
+        self._log_message(LOG_INFO, "SSL-соединение успешно установлено")
+        for pending_mission in self._pending_missions:
+            self._log_message(LOG_INFO, "отправляем отложенную миссию")
+            self.set_new_mission(*pending_mission)
 
     def _encrypt_mission(self, mission: Mission) -> bytes:
         """Шифрует маршрутное задание"""
@@ -257,6 +254,16 @@ class MissionPlanner(Process):
 
             arm (bool, optional): разрешение на выезд. Defaults to False.
         """
+
+        # if self._ssl_connection_established is False:
+        #     self._log_message(LOG_ERROR, "SSL-соединение не установлено, невозможно установить новую миссию")
+        #     return
+        if not self._ssl_connection_established:
+            self._log_message(LOG_ERROR, "SSL-соединение не установлено, невозможно установить новую миссию")
+            self._pending_missions.append(
+                (mission, home, waypoints, speed_limits, arm))
+            self._log_message(LOG_INFO, "миссия отложена до установления SSL-соединения")
+
         if mission is None:
             mission = Mission(home=home, waypoints=waypoints,
                               speed_limits=speed_limits, armed=arm)
@@ -267,6 +274,12 @@ class MissionPlanner(Process):
         self._events_q.put(event)
         self._log_message(LOG_DEBUG, f"запрошена новая задача: {mission}")
     def _set_mission(self, mission: Mission):
+        if not self._ssl_connection_established:
+            self._log_message(LOG_ERROR, "SSL-соединение не установлено, невозможно установить новую миссию")
+            self._pending_missions.append((mission,))
+            self._log_message(LOG_INFO, "миссия отложена до установления SSL-соединения")
+            return
+
         self._mission = mission
         self._log_message(
             LOG_DEBUG, f"установлена новая задача: {self._mission}")
@@ -308,7 +321,6 @@ class MissionPlanner(Process):
         except Exception as e:
             self._log_message(LOG_ERROR, f"ошибка отправки зашифрованной задачи в TLS терминатор: {e}")
 
-
     # проверка наличия новых управляющих команд
     def _process_event(self, event: Event):
         self._log_message(LOG_INFO, f"обработка события: {event}")
@@ -323,7 +335,8 @@ class MissionPlanner(Process):
             self._process_server_hello(event.parameters)
         elif event.operation == 'server_key_exchange':
             self._process_server_key_exchange(event.parameters)
-
+        elif event.operation == 'finish_handshake':
+            self._process_finish_handshake(event.parameters)
     def _check_control_q(self):
         try:
             request: ControlEvent = self._control_q.get_nowait()
