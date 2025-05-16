@@ -21,6 +21,8 @@ from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 import datetime
+import json
+from cryptography.hazmat.primitives.asymmetric import padding
 
 class TLSTerminator(Process):
     """TLS-терминатор между планировщиком и связью с дешифрованием данных."""
@@ -95,6 +97,8 @@ class TLSTerminator(Process):
             self._forward_mission_to_communication_gateway(event.parameters)
         elif event.operation == "client_hello":
             self._process_client_hello(event)
+        elif event.operation == "client_key_exchange":
+            self._process_client_key_exchange(event)
         else:
             self._log_message(LOG_ERROR, f"Неизвестная операция: {event.operation}")
     def _process_client_hello(self, event: Event):
@@ -197,14 +201,23 @@ class TLSTerminator(Process):
     def _generate_and_send_server_key_exchange(self, source: str):
         self._log_message(LOG_INFO, "генерация server_key_exchange")
 
-        server_key_exchange_message = {
+        payload = {
             "P1": self._P1,
             "P2": self._P2,
             "S": self._S,
         }
 
-        # encrypt the message with server's private key (kinda like signing)
-        # ...
+        data = pickle.dumps(payload)
+        signature = self._private_key.sign(
+            data,
+            padding.PKCS1v15(),
+            hashes.SHA256()
+        )
+
+        server_key_exchange_message = {
+            "payload": payload,
+            "signature": signature,
+        }
 
         event = Event(
             source=self.event_q_name,
@@ -253,7 +266,6 @@ class TLSTerminator(Process):
                 self._process_event(event)
         except Empty:
             pass
-
     def _check_control_q(self):
         try:
             cmd = self._control_q.get_nowait()
@@ -262,10 +274,8 @@ class TLSTerminator(Process):
                 self._log_message(LOG_INFO, "Получен сигнал остановки")
         except Empty:
             pass
-
     def stop(self):
         self._control_q.put(ControlEvent(operation="stop"))
-
     def run(self):
         self._log_message(LOG_INFO, "TLS терминатор запущен")
         while not self._quit:

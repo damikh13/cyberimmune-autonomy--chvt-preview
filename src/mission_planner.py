@@ -8,9 +8,7 @@ from geopy import Point
 import pickle
 import os
 from pathlib import Path
-
 from cryptography.fernet import Fernet
-
 from src.config import CRITICALITY_STR, LOG_DEBUG, \
     LOG_ERROR, LOG_INFO, PLANNER_QUEUE_NAME, DEFAULT_LOG_LEVEL, MISSION_SENDER_QUEUE_NAME, \
     TLS_TERMINATOR_QUEUE_NAME
@@ -22,7 +20,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.x509.oid import ExtensionOID
 from cryptography.hazmat.primitives.asymmetric import padding
 import datetime
-
+import json
 
 class MissionPlanner(Process):
     """MissionPlanner обработчик и хранитель маршрутного задания
@@ -35,6 +33,7 @@ class MissionPlanner(Process):
     log_level = DEFAULT_LOG_LEVEL
     SECRET_KEY_PATH = "secret_key"
     TRUSTED_ROOT_CERT = "certs/ca_root.crt"
+    CLIENT_SECRET_C = 3
 
     def __init__(
             self, queues_dir: QueuesDirectory, afcs_present: bool = False, mission: Mission = None):
@@ -65,6 +64,7 @@ class MissionPlanner(Process):
 
         # инициализация SSL-соединения с TLS терминатором
         self._initialize_ssl_connection()
+        self._server_public_key = None
 
         with open(self.TRUSTED_ROOT_CERT, "rb") as f:
             self._trusted_root = x509.load_pem_x509_certificate(f.read())
@@ -154,7 +154,63 @@ class MissionPlanner(Process):
         # 5. Extract server’s public key to use for the next handshake step
         # server_public_key = cert.public_key()
         self._server_public_key = cert.public_key()
+    def _process_server_key_exchange(self, key_exchange_message):
+        print('\n'*5)
+        self._log_message(LOG_INFO, "получен server_key_exchange от TLS терминатора")
+        
+        payload = key_exchange_message["payload"]
+        signature = key_exchange_message["signature"]
 
+        data = pickle.dumps(payload)
+
+        try:
+            self._server_public_key.verify(
+                signature,
+                data,
+                padding.PKCS1v15(),
+                hashes.SHA256()
+            )
+        except Exception as e:
+            self._log_message(LOG_ERROR, f"invalid server_key_exchange signature: {e}")
+            raise
+
+        self._log_message(LOG_INFO, "server_key_exchange signature is valid")
+
+        P1 = payload["P1"]
+        P2 = payload["P2"]
+        S  = payload["S"]
+
+        c = self.CLIENT_SECRET_C
+        C = P1**c % P2
+        K = S**c % P2
+        self._log_message(LOG_INFO, f"client secret C: {C}, shared secret K: {K}")
+
+        # encrypt the calculated C with the server's public key
+        C_bytes = C.to_bytes((C.bit_length() + 7)//8, byteorder="big")
+        encrypted_C = self._server_pubkey.encrypt(
+            C_bytes,
+            padding.OAEP(
+                mgf=padding.MGF1(hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+ 
+        client_key_exchange_message = {
+            "encrypted_C": encrypted_C,
+        }
+ 
+        event = Event(
+            source=self.event_source_name,
+            destination=TLS_TERMINATOR_QUEUE_NAME,
+            operation="client_key_exchange",
+            parameters=client_key_exchange_message
+        )
+
+        tls_terminator_q: Queue = self._queues_dir.get_queue(TLS_TERMINATOR_QUEUE_NAME)
+        tls_terminator_q.put(event)
+        self._log_message(LOG_INFO, "отправлен client_key_exchange в TLS терминатор")
+        print('\n'*5)
 
     def _encrypt_mission(self, mission: Mission) -> bytes:
         """Шифрует маршрутное задание"""
