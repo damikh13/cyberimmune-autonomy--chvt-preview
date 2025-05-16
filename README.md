@@ -83,3 +83,10 @@ openssl verify -CAfile ca_root.crt server.crt
 ```
 server.crt: OK
 ```
+
+# Тестирование
+Все тесты основных компонент выполнены в файле `test_tls_mission.py`.
+Запуск тестов проивзодится при помощи команды:
+```
+pytest -q
+```
