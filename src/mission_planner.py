@@ -17,6 +17,11 @@ from src.config import CRITICALITY_STR, LOG_DEBUG, \
 from src.queues_dir import QueuesDirectory
 from src.event_types import Event, ControlEvent
 from src.mission_type import Mission
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.x509.oid import ExtensionOID
+from cryptography.hazmat.primitives.asymmetric import padding
+import datetime
 
 
 class MissionPlanner(Process):
@@ -29,6 +34,7 @@ class MissionPlanner(Process):
     event_q_name = event_source_name
     log_level = DEFAULT_LOG_LEVEL
     SECRET_KEY_PATH = "secret_key"
+    TRUSTED_ROOT_CERT = "certs/ca_root.crt"
 
     def __init__(
             self, queues_dir: QueuesDirectory, afcs_present: bool = False, mission: Mission = None):
@@ -59,6 +65,10 @@ class MissionPlanner(Process):
 
         # инициализация SSL-соединения с TLS терминатором
         self._initialize_ssl_connection()
+
+        with open(self.TRUSTED_ROOT_CERT, "rb") as f:
+            self._trusted_root = x509.load_pem_x509_certificate(f.read())
+        self._trusted_pubkey = self._trusted_root.public_key()
 
         # маршрут для движения
         self._mission: Optional[Mission] = None
@@ -111,6 +121,40 @@ class MissionPlanner(Process):
         tls_terminator_q: Queue = self._queues_dir.get_queue(TLS_TERMINATOR_QUEUE_NAME)
         tls_terminator_q.put(client_hello_event)
         self._log_message(LOG_INFO, "отправлен client_hello в TLS терминатор")
+    def _process_server_hello(self, server_hello):
+        self._log_message(LOG_INFO, "получен server_hello от TLS терминатора")
+        
+        # 1. Extract the certificate bytes from the server_hello
+        cert_pem = server_hello["certificate_chain"][0]  # assuming single cert
+        cert = x509.load_pem_x509_certificate(cert_pem)
+
+        # 2. Verify the signature on the server cert against the trusted root
+        try:
+            self._trusted_pubkey.verify(
+                cert.signature,
+                cert.tbs_certificate_bytes,
+                # Padding & hash must match how the CA signed it:
+                padding.PKCS1v15(),
+                cert.signature_hash_algorithm,
+            )
+        except Exception as e:
+            self._log_message(LOG_ERROR, f"certificate signature invalid: {e}")
+            raise ValueError("invalid server certificate signature")
+        self._log_message(LOG_INFO, "server certificate signature is valid")
+
+        # 3. Check validity dates
+        now = datetime.datetime.utcnow()
+        if now < cert.not_valid_before or now > cert.not_valid_after:
+            self._log_message(LOG_ERROR, "certificate expired or not yet valid")
+            raise ValueError("cerver certificate is not valid at this time")
+        self._log_message(LOG_INFO, "server certificate is within valid date range")
+
+        self._log_message(LOG_INFO, "server certificate is trusted and valid")
+
+        # 5. Extract server’s public key to use for the next handshake step
+        # server_public_key = cert.public_key()
+        self._server_public_key = cert.public_key()
+
 
     def _encrypt_mission(self, mission: Mission) -> bytes:
         """Шифрует маршрутное задание"""
@@ -207,8 +251,23 @@ class MissionPlanner(Process):
             self._log_message(LOG_INFO, "зашифрованная задача отправлена в TLS терминатор")
         except Exception as e:
             self._log_message(LOG_ERROR, f"ошибка отправки зашифрованной задачи в TLS терминатор: {e}")
-            
+
+
     # проверка наличия новых управляющих команд
+    def _process_event(self, event: Event):
+        self._log_message(LOG_INFO, f"обработка события: {event}")
+        if event.operation == 'set_mission':
+            try:
+                # если пришло новое маршрутное задание, устанавливаем его
+                self._set_mission(event.parameters)
+            except Exception as e:
+                self._log_message(
+                    LOG_ERROR, f"ошибка установки новой миссии: {e}")
+        elif event.operation == 'server_hello':
+            self._process_server_hello(event.parameters)
+        elif event.operation == 'server_key_exchange':
+            self._process_server_key_exchange(event.parameters)
+
     def _check_control_q(self):
         try:
             request: ControlEvent = self._control_q.get_nowait()
@@ -224,12 +283,14 @@ class MissionPlanner(Process):
             event: Event = self._events_q.get_nowait()
             if not isinstance(event, Event):
                 return
-            if event.operation == 'set_mission':
-                try:
-                    self._set_mission(event.parameters)
-                except Exception as e:
-                    self._log_message(
-                        LOG_ERROR, f"ошибка отправки координат: {e}")
+            # if event.operation == 'set_mission':
+            #     try:
+            #         self._set_mission(event.parameters)
+            #     except Exception as e:
+            #         self._log_message(
+            #             LOG_ERROR, f"ошибка отправки координат: {e}")
+            self._process_event(event)
+
         except Empty:
             # никаких команд не поступило, ну и ладно
             pass

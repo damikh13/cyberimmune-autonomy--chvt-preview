@@ -23,3 +23,4 @@ CRITICALITY_STR = [
 
 TLS_CERT_PATH = "certs/server.crt"
 TLS_KEY_PATH = "certs/server.key"
+TRUSTED_ROOT_CA_PATH = "certs/ca_root.crt"
