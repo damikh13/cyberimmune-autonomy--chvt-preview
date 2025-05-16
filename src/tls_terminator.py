@@ -19,10 +19,11 @@ from src.mission_type import Mission
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric import rsa
 import datetime
 import json
-from cryptography.hazmat.primitives.asymmetric import padding
+import base64
 
 class TLSTerminator(Process):
     """TLS-терминатор между планировщиком и связью с дешифрованием данных."""
@@ -31,7 +32,6 @@ class TLSTerminator(Process):
     event_q_name = TLS_TERMINATOR_QUEUE_NAME
     SECRET_KEY_PATH = "secret_key"
     cipher_suites = ["TLS_AES_128_CBC_SHA256"] # add more as needed
-    
 
     def __init__(self, queues_dir: QueuesDirectory, cert_path: str = None, key_path: str = None, log_level: int = DEFAULT_LOG_LEVEL):
         super().__init__()
@@ -232,6 +232,60 @@ class TLSTerminator(Process):
             self._log_message(LOG_INFO, "отправлен server_key_exchange")
         else:
             self._log_message(LOG_ERROR, f"Не найдена очередь для {source}") 
+    def _process_client_key_exchange(self, event: Event):
+        self._log_message(LOG_INFO, f"получено событие client_key_exchange: {event.parameters}")
+
+        encrypted_C = event.parameters.get("encrypted_C")
+        if not encrypted_C:
+            self._log_message(LOG_ERROR, "Нет поля encrypted_C в client_key_exchange")
+            return
+
+        # 1) Decrypt C with our RSA private key
+        try:
+            C_bytes = self._private_key.decrypt(
+                encrypted_C,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+        except Exception as e:
+            self._log_message(LOG_ERROR, f"Не удалось расшифровать C: {e}")
+            return
+
+        # 2) Convert back to integer
+        C = int.from_bytes(C_bytes, byteorder="big")
+        self._log_message(LOG_INFO, f"Дешифрован C={C}")
+
+        # 3) Compute shared secret K = Cˢ mod P2
+        #    (make sure you saved self._P2 and your exponent self._s earlier)
+        K = pow(C, self._s, self._P2)
+        self._log_message(LOG_INFO, f"Вычислен общий секрет K={K}")
+
+        # 4) Derive a symmetric key from K
+        #    For example, hash it down to 32 bytes for Fernet/AES-256:
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(K.to_bytes((K.bit_length()+7)//8, byteorder="big"))
+        sym_key = digest.finalize()              # 32 bytes
+
+        #    If you’re using Fernet, you need 32 url-safe base64 bytes:
+        fernet_key = base64.urlsafe_b64encode(sym_key)
+        self._cipher = Fernet(fernet_key)
+        self._log_message(LOG_INFO, "установлен симметричный шифр на основе K")
+
+        finish_evt = Event(
+            source=self.event_q_name,
+            destination=event.source,
+            operation="finish_handshake",
+            parameters={}
+        )
+        q = self._queues_dir.get_queue(event.source)
+        if q:
+            q.put(finish_evt)
+            self._log_message(LOG_INFO, "отправлен handshake_finished клиенту")
+        else:
+            self._log_message(LOG_ERROR, f"Не найдена очередь для {event.source}")
 
     def _forward_mission_to_communication_gateway(self, encrypted_mission: bytes):
         try:
