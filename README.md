@@ -20,10 +20,66 @@
 
 # Генерация сертификатов для работы TLS терминатора
 
-```bash
-openssl genrsa -out certs/server.key 2048
-```
+Создаём директорию для хранения сертификатов и ключей:
 
 ```bash
-openssl req -new -x509 -key certs/server.key -out certs/server.crt -days 365 -subj "/CN=localhost"
+mkdir certs
+cd certs
+```
+
+Создаём приватный ключ для Root CA:
+
+```bash
+openssl genrsa -out ca_root.key 4096
+```
+
+Создаём самоподписанный сертификат для Root CA:
+
+```bash
+openssl req -x509 -new -nodes \
+  -key ca_root.key \
+  -sha256 \
+  -days 3650 \
+  -out ca_root.crt \
+  -subj "/CN=My Test CA/O=MyOrg/OU=Dev"
+```
+
+Создаём приватный ключ для сервера (TLS терминатора):
+
+```bash
+openssl genrsa -out server.key 2048
+```
+
+Создаём запрос на сертификат для сервера:
+
+```bash
+openssl req -new \
+  -key server.key \
+  -out server.csr \
+  -subj "/CN=my.server.local/O=MyOrg/OU=Services"
+```
+
+Создаём сертификат для сервера, подписанный Root CA:
+
+```bash
+openssl x509 -req \
+  -in server.csr \
+  -CA ca_root.crt \
+  -CAkey ca_root.key \
+  -CAcreateserial \
+  -out server.crt \
+  -days 365 \
+  -sha256
+```
+
+Можем проверить, что сертификат корректно подписан:
+
+```bash
+openssl verify -CAfile ca_root.crt server.crt
+```
+
+Должно получиться что-то вроде:
+
+```
+server.crt: OK
 ```
