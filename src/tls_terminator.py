@@ -18,13 +18,14 @@ from src.queues_dir import QueuesDirectory
 from src.event_types import Event, ControlEvent
 from src.mission_type import Mission
 
-
 class TLSTerminator(Process):
     """TLS-терминатор между планировщиком и связью с дешифрованием данных."""
 
     log_prefix = "[TLS TERMINATOR]"
     event_q_name = TLS_TERMINATOR_QUEUE_NAME
     SECRET_KEY_PATH = "secret_key"
+    cipher_suites = ["TLS_AES_128_CBC_SHA256"] # add more as needed
+    
 
     def __init__(self, queues_dir: QueuesDirectory, cert_path: str = None, key_path: str = None, log_level: int = DEFAULT_LOG_LEVEL):
         super().__init__()
@@ -38,17 +39,16 @@ class TLSTerminator(Process):
 
         self._events_q = Queue()
         self._queues_dir.register(self._events_q, name=self.event_q_name)
+        self._log_message(LOG_INFO, f"регистрируем очередь {self.event_q_name}")
 
         self._control_q = Queue()
         self._check_interval_sec = 0.1
         self._quit = False
 
         self._log_message(LOG_INFO, "TLS терминатор инициализирован")
-
     def _log_message(self, criticality: int, message: str):
         if criticality <= self.log_level:
             print(f"[{CRITICALITY_STR[criticality]}]{self.log_prefix} {message}")
-
     def _initialize_cipher_key(self) -> bytes:
         path = Path(self.SECRET_KEY_PATH)
         try:
@@ -65,7 +65,6 @@ class TLSTerminator(Process):
         except Exception as e:
             self._log_message(LOG_ERROR, f"Ошибка инициализации ключа: {e}")
             return Fernet.generate_key()
-
     def _decrypt_mission(self, encrypted_data: bytes) -> Mission:
         """Расшифровывает маршрутное задание"""
         try:
@@ -81,8 +80,41 @@ class TLSTerminator(Process):
         self._log_message(LOG_INFO, f"Обработка события: {event}")
         if event.operation == "set_mission":
             self._forward_mission_to_communication_gateway(event.parameters)
+        elif event.operation == "client_hello":
+            self._process_client_hello(event)
         else:
             self._log_message(LOG_ERROR, f"Неизвестная операция: {event.operation}")
+
+    def _process_client_hello(self, event: Event):
+        """Обрабатывает событие client_hello, пока не реализовано"""
+        self._log_message(LOG_INFO, f"получено событие client_hello: {event.parameters}")
+        # choose a cipher suite based on client cipher preferences and our supported suites
+        if not event.parameters or "cipher_suites" not in event.parameters:
+            self._log_message(LOG_ERROR, "не указана шифровальная система в client_hello")
+            return
+        client_ciphers = event.parameters["cipher_suites"]
+        self._log_message(LOG_INFO, f"Клиентские шифры: {client_ciphers}")
+        chosen_cipher = None
+        for cipher in self.cipher_suites:
+            if cipher in client_ciphers:
+                chosen_cipher = cipher
+                break
+        if chosen_cipher:
+            self._log_message(LOG_INFO, f"Выбран шифр: {chosen_cipher}")
+        else:
+            self._log_message(LOG_ERROR, "Не удалось выбрать шифр из предложенных клиентом")
+            return
+        # здесь можно добавить логику для дальнейшей обработки client_hello
+
+        self._generate_and_send_server_hello(event.source, chosen_cipher)
+
+    def _generate_and_send_server_hello(self, source: str, cipher_suite: str):
+        self._log_message(LOG_INFO, f"генерация server_hello с шифром {cipher_suite}")
+        server_hello_message = {
+            "your_ssl_version_is_good": True, # should be determined by actual checks
+            "random": os.urandom(32), # for now, unused
+            "cipher_suite": cipher_suite,
+        }
 
     def _forward_mission_to_communication_gateway(self, encrypted_mission: bytes):
         try:

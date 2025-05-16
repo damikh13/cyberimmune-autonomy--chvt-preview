@@ -57,6 +57,9 @@ class MissionPlanner(Process):
         self._cipher_key = self._initialize_cipher_key()
         self._cipher = Fernet(self._cipher_key)
 
+        # инициализация SSL-соединения с TLS терминатором
+        self._initialize_ssl_connection()
+
         # маршрут для движения
         self._mission: Optional[Mission] = None
 
@@ -84,6 +87,31 @@ class MissionPlanner(Process):
             self._log_message(LOG_ERROR, f"Ошибка инициализации ключа: {e}")
             return Fernet.generate_key()
 
+    def _initialize_ssl_connection(self):
+        # send client_hello to TLS terminator
+        self._log_message(LOG_INFO, "пытаемся установить SSL-соединение с TLS терминатором")
+        self._log_message(LOG_DEBUG, "отправляем client_hello в TLS терминатор")
+
+        # формируем сообщение client_hello
+        client_hello_message = {
+            "ssl_version": "TLSv1.0",
+            "random": os.urandom(32), # for now, unused
+            "session_id": "0", # new session
+            "cipher_suites": ["TLS_AES_128_CBC_SHA256"],  # should match Fernet's AES-128-CBC
+            "compression_methods": ["null"],
+        }
+
+        client_hello_event = Event(
+            source=self.event_source_name,
+            destination=TLS_TERMINATOR_QUEUE_NAME,
+            operation="client_hello",
+            parameters=client_hello_message
+        )
+
+        tls_terminator_q: Queue = self._queues_dir.get_queue(TLS_TERMINATOR_QUEUE_NAME)
+        tls_terminator_q.put(client_hello_event)
+        self._log_message(LOG_INFO, "отправлен client_hello в TLS терминатор")
+
     def _encrypt_mission(self, mission: Mission) -> bytes:
         """Шифрует маршрутное задание"""
         try:
@@ -97,7 +125,6 @@ class MissionPlanner(Process):
         except Exception as e:
             self._log_message(LOG_ERROR, f"Ошибка при шифровании: {e}")
             raise
-
     def _log_message(self, criticality: int, message: str):
         """_log_message печатает сообщение заданного уровня критичности
 
@@ -107,14 +134,11 @@ class MissionPlanner(Process):
         """
         if criticality <= self.log_level:
             print(f"[{CRITICALITY_STR[criticality]}]{self.log_prefix} {message}")
-
     def _get_mission(self) -> Optional[Mission]:
         self._log_message(LOG_INFO, "получен запрос новой миссии")
         return self._mission
-
     def _status_update(self, telemetry):
         self._log_message(LOG_INFO, f"получен новый статус: {telemetry}")
-
     def set_new_mission(
             self, mission: Mission = None, home: Point = None,
             waypoints: Optional[List] = None,
@@ -142,7 +166,6 @@ class MissionPlanner(Process):
                       parameters=mission)
         self._events_q.put(event)
         self._log_message(LOG_DEBUG, f"запрошена новая задача: {mission}")
-
     def _set_mission(self, mission: Mission):
         self._mission = mission
         self._log_message(
@@ -154,7 +177,6 @@ class MissionPlanner(Process):
             # если есть система управления парком автомобилей,
             # отправим туда полученное маршрутное задание
             self._send_mission_to_afcs(mission)
-
     def _send_mission_to_afcs(self, mission: Mission):
         """ отправить новую миссию в СУПА
         """
@@ -167,7 +189,6 @@ class MissionPlanner(Process):
         except Exception as e:
             self._log_message(
                 LOG_ERROR, f"ошибка отправки миссии по mqtt: {e}")
-
     def _send_mission_to_communication_gateway(self):
         """Шифрует и отправляет задание в TLS терминатор"""
         try:
@@ -183,7 +204,6 @@ class MissionPlanner(Process):
             # Получаем очередь TLS терминатора и отправляем событие
             tls_terminator_q: Queue = self._queues_dir.get_queue(TLS_TERMINATOR_QUEUE_NAME)
             tls_terminator_q.put(event)
-            
             self._log_message(LOG_INFO, "зашифрованная задача отправлена в TLS терминатор")
         except Exception as e:
             self._log_message(LOG_ERROR, f"ошибка отправки зашифрованной задачи в TLS терминатор: {e}")
@@ -199,7 +219,6 @@ class MissionPlanner(Process):
         except Empty:
             # никаких команд не поступило, ну и ладно
             pass
-
     def _check_events_q(self):
         try:
             event: Event = self._events_q.get_nowait()
@@ -214,11 +233,9 @@ class MissionPlanner(Process):
         except Empty:
             # никаких команд не поступило, ну и ладно
             pass
-
     def stop(self):
         """ запрос на остановку работы """
         self._control_q.put(ControlEvent(operation='stop'))
-
     def run(self):
         """ начало работы """
         self._log_message(LOG_INFO, "старт системы планирования заданий")

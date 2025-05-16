@@ -386,6 +386,12 @@ if afcs_present:
         queues_dir=queues_dir, client_id=car_id, log_level=LOG_ERROR)
 
 # создание основных функциональных блоков
+tls_terminator = TLSTerminator(
+    queues_dir=queues_dir, 
+    cert_path=TLS_CERT_PATH, 
+    key_path=TLS_KEY_PATH, 
+    log_level=LOG_INFO
+)
 mission_planner = MissionPlanner(
     queues_dir, afcs_present=afcs_present, mission=mission)
 
@@ -393,12 +399,6 @@ sitl = SITL(
     queues_dir=queues_dir, position=home,
     car_id=car_id, post_telemetry=afcs_present, log_level=LOG_ERROR)
 
-tls_terminator = TLSTerminator(
-    queues_dir=queues_dir, 
-    cert_path=TLS_CERT_PATH, 
-    key_path=TLS_KEY_PATH, 
-    log_level=LOG_INFO
-)
 communication_gateway = CommunicationGateway(
     queues_dir=queues_dir, log_level=LOG_ERROR)
 control_system = ControlSystem(queues_dir=queues_dir, log_level=LOG_INFO)
@@ -416,11 +416,11 @@ components=[
         mission_sender,
         telemetry_sender,
         sitl,
+        tls_terminator,
         mission_planner,
         navigation_system,
         servos,
         cargo_bay,
-        tls_terminator,
         communication_gateway,
         control_system,
         safety_block,
@@ -430,11 +430,11 @@ components=[
         mission_sender,
         telemetry_sender,
         sitl,
+        tls_terminator,
         mission_planner,
         navigation_system,
         servos,
         cargo_bay,
-        tls_terminator,
         communication_gateway,
         control_system,
         safety_block,
