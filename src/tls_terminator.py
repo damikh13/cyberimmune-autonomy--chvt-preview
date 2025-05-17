@@ -30,7 +30,6 @@ class TLSTerminator(Process):
 
     log_prefix = "[TLS TERMINATOR]"
     event_q_name = TLS_TERMINATOR_QUEUE_NAME
-    SECRET_KEY_PATH = "secret_key"
     cipher_suites = ["TLS_AES_128_CBC_SHA256"] # add more as needed
 
     def __init__(self, queues_dir: QueuesDirectory, cert_path: str = None, key_path: str = None, log_level: int = DEFAULT_LOG_LEVEL):
@@ -50,8 +49,6 @@ class TLSTerminator(Process):
         self._s = 5
         self._S = self._P1 ** self._s % self._P2
 
-        self._cipher_key = self._initialize_cipher_key()
-        self._cipher = Fernet(self._cipher_key)
 
         self._events_q = Queue()
         self._queues_dir.register(self._events_q, name=self.event_q_name)
@@ -65,22 +62,6 @@ class TLSTerminator(Process):
     def _log_message(self, criticality: int, message: str):
         if criticality <= self.log_level:
             print(f"[{CRITICALITY_STR[criticality]}]{self.log_prefix} {message}")
-    def _initialize_cipher_key(self) -> bytes:
-        path = Path(self.SECRET_KEY_PATH)
-        try:
-            if path.exists():
-                with open(path, 'rb') as f:
-                    key = f.read()
-                    self._log_message(LOG_INFO, "Загружен существующий ключ")
-            else:
-                key = Fernet.generate_key()
-                with open(path, 'wb') as f:
-                    f.write(key)
-                self._log_message(LOG_INFO, "Создан и сохранён новый ключ")
-            return key
-        except Exception as e:
-            self._log_message(LOG_ERROR, f"Ошибка инициализации ключа: {e}")
-            return Fernet.generate_key()
     def _decrypt_mission(self, encrypted_data: bytes) -> Mission:
         """Расшифровывает маршрутное задание"""
         try:
