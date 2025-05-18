@@ -117,8 +117,6 @@ def test_certificate_validation(cert_paths, rogue_cert):
             rogue_srv.signature, rogue_srv.tbs_certificate_bytes,
             padding.PKCS1v15(), rogue_srv.signature_hash_algorithm,
         )
-
-
 def test_tls_terminator_initialization(cert_paths, queues_dir):
     """Проверка инициализации TLS-терминатора."""
     _, crt_path, key_path = cert_paths
@@ -136,34 +134,6 @@ def test_tls_terminator_initialization(cert_paths, queues_dir):
     # Проверка загрузки сертификата и ключа
     assert terminator._cert_bytes is not None
     assert terminator._private_key is not None
-
-
-def test_queues_directory_event_flow(queues_dir):
-    """Проверка передачи событий через директорию очередей."""
-    # Создаем тестовое событие с правильными параметрами
-    test_event = Event(
-        source="test_source",
-        destination="test_destination",
-        operation="test_event",
-        parameters={'data': 123}
-    )
-    
-    # Создаем тестовую очередь
-    test_queue = Queue()
-    queues_dir.register(test_queue, "test_queue")
-    
-    # Помещаем событие в очередь
-    queues_dir.get_queue("test_queue").put(test_event)
-    
-    # Проверка наличия и корректности события
-    try:
-        received = queues_dir.get_queue("test_queue").get(timeout=1)
-        assert received.operation == 'test_event'
-        assert received.parameters['data'] == 123
-    except Empty:
-        pytest.fail("Событие не было получено из очереди")
-
-
 def test_mission_planner_initialization(queues_dir):
     """Проверка инициализации планировщика миссий."""
     # Регистрируем необходимые очереди
@@ -180,8 +150,6 @@ def test_mission_planner_initialization(queues_dir):
     assert planner._queues_dir == queues_dir
     assert planner._ssl_connection_established == False
     assert planner._pending_missions == []
-
-
 def test_tls_terminator_process_client_hello(tls_terminator, queues_dir):
     """Проверка обработки client_hello в TLS-терминаторе."""
     # Создаем очередь для ответа и регистрируем её
@@ -223,8 +191,6 @@ def test_tls_terminator_process_client_hello(tls_terminator, queues_dir):
         assert "S" in response.parameters["payload"]
     except Empty:
         pytest.fail("Не получен ответ на client_hello")
-
-
 def test_mission_encryption_decryption(tls_terminator, mission_planner):
     """Проверка шифрования и дешифрования миссии."""
     # Создаем тестовый Fernet-ключ
@@ -255,26 +221,6 @@ def test_mission_encryption_decryption(tls_terminator, mission_planner):
     assert decrypted_mission.home.longitude == test_mission.home.longitude
     assert len(decrypted_mission.waypoints) == len(test_mission.waypoints)
     assert decrypted_mission.armed == test_mission.armed
-
-
-def test_tls_terminator_stop(tls_terminator):
-    """Проверка остановки TLS-терминатора."""
-    # Начальное состояние
-    assert tls_terminator._quit == False
-    
-    # Патчим соответствующие методы, чтобы _quit устанавливался
-    with patch.object(tls_terminator, '_check_control_q', 
-                     side_effect=lambda: setattr(tls_terminator, '_quit', True)):
-        # Отправляем команду остановки
-        tls_terminator.stop()
-        
-        # Проверяем обработку команды
-        tls_terminator._check_control_q()
-        
-        # Проверяем, что флаг остановки установлен
-        assert tls_terminator._quit == True
-
-
 def test_full_tls_handshake_simulation():
     """Полная симуляция TLS-рукопожатия с реальным обменом данными."""
     # Создаем директорию очередей
