@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 import datetime
 import json
 import base64
+from cryptography.hazmat.primitives import hmac as crypto_hmac
 
 class TLSTerminator(Process):
     """TLS-терминатор между планировщиком и связью с дешифрованием данных."""
@@ -62,9 +63,27 @@ class TLSTerminator(Process):
     def _log_message(self, criticality: int, message: str):
         if criticality <= self.log_level:
             print(f"[{CRITICALITY_STR[criticality]}]{self.log_prefix} {message}")
-    def _decrypt_mission(self, encrypted_data: bytes) -> Mission:
-        """Расшифровывает маршрутное задание"""
+    def _decrypt_mission(self, encrypted_package: bytes) -> Mission:
+        """Расшифровывает маршрутное задание, проверяя его аутентичность"""
         try:
+            # Распаковываем пакет
+            package = pickle.loads(encrypted_package)
+            
+            # Извлекаем зашифрованные данные и MAC
+            encrypted_data = package["encrypted_data"]
+            received_mac = package["mac"]
+            
+            # Проверяем MAC
+            h = crypto_hmac.HMAC(self._hmac_key, hashes.SHA256())
+            h.update(encrypted_data)
+            try:
+                h.verify(received_mac)
+                self._log_message(LOG_INFO, "MAC проверен успешно - сообщение подлинное")
+            except Exception as e:
+                self._log_message(LOG_ERROR, f"Ошибка проверки MAC - возможно подмена данных: {e}")
+                raise ValueError("MAC verification failed - possible tampering")
+            
+            # Только после проверки MAC расшифровываем данные
             decrypted = self._cipher.decrypt(encrypted_data)
             mission = pickle.loads(decrypted)
             self._log_message(LOG_INFO, "Задание расшифровано")
@@ -267,6 +286,16 @@ class TLSTerminator(Process):
             self._log_message(LOG_INFO, "отправлен handshake_finished клиенту")
         else:
             self._log_message(LOG_ERROR, f"Не найдена очередь для {event.source}")
+
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(K.to_bytes((K.bit_length()+7)//8, byteorder="big"))
+        sym_key = digest.finalize()              # 32 bytes
+
+        # Создаем отдельный ключ для HMAC на основе K
+        hmac_digest = hashes.Hash(hashes.SHA256())
+        hmac_digest.update(K.to_bytes((K.bit_length()+7)//8, byteorder="big"))
+        hmac_digest.update(b"HMAC_AUTH_KEY")  # та же "соль", что и в планировщике
+        self._hmac_key = hmac_digest.finalize()
 
     def _forward_mission_to_communication_gateway(self, encrypted_mission: bytes):
         try:

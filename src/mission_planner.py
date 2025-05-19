@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 import datetime
 import json
 import base64
+from cryptography.hazmat.primitives import hmac as crypto_hmac
 
 class MissionPlanner(Process):
     """MissionPlanner обработчик и хранитель маршрутного задания
@@ -85,6 +86,7 @@ class MissionPlanner(Process):
         self._log_message(LOG_INFO, "пытаемся установить SSL-соединение с TLS терминатором")
         self._log_message(LOG_DEBUG, "отправляем client_hello в TLS терминатор")
 
+        self._hmac_key = None
         # формируем сообщение client_hello
         client_hello_message = {
             "ssl_version": "TLSv1.0",
@@ -200,6 +202,16 @@ class MissionPlanner(Process):
         tls_terminator_q: Queue = self._queues_dir.get_queue(TLS_TERMINATOR_QUEUE_NAME)
         tls_terminator_q.put(event)
         self._log_message(LOG_INFO, "отправлен client_key_exchange в TLS терминатор")
+
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(K.to_bytes((K.bit_length()+7)//8, byteorder="big"))
+        sym_key = digest.finalize()              # 32 bytes
+
+        # Создаем отдельный ключ для HMAC на основе K
+        hmac_digest = hashes.Hash(hashes.SHA256())
+        hmac_digest.update(K.to_bytes((K.bit_length()+7)//8, byteorder="big"))
+        hmac_digest.update(b"HMAC_AUTH_KEY")  # добавляем "соль" для отличия от ключа шифрования
+        self._hmac_key = hmac_digest.finalize()
     def _process_finish_handshake(self, finish_handshake_message):
         self._log_message(LOG_INFO, "получен finish_handshake от TLS терминатора")
         
@@ -210,15 +222,25 @@ class MissionPlanner(Process):
             self.set_new_mission(*pending_mission)
 
     def _encrypt_mission(self, mission: Mission) -> bytes:
-        """Шифрует маршрутное задание"""
+        """Шифрует маршрутное задание и добавляет MAC для аутентификации"""
         try:
             # Используем высокий протокол для сохранения всех типов данных
-            # print(mission)
             data = pickle.dumps(mission, protocol=pickle.HIGHEST_PROTOCOL)
             encrypted = self._cipher.encrypt(data)
-            self._log_message(LOG_INFO, "Задание зашифровано")
-            # print(encrypted)
-            return encrypted
+            
+            # Создаем HMAC для зашифрованных данных
+            h = crypto_hmac.HMAC(self._hmac_key, hashes.SHA256())
+            h.update(encrypted)
+            mac = h.finalize()
+            
+            # Возвращаем пару: MAC + зашифрованные данные
+            result = {
+                "encrypted_data": encrypted,
+                "mac": mac
+            }
+            
+            self._log_message(LOG_INFO, "Задание зашифровано и подписано")
+            return pickle.dumps(result)
         except Exception as e:
             self._log_message(LOG_ERROR, f"Ошибка при шифровании: {e}")
             raise
