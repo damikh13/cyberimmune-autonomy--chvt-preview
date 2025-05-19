@@ -30,17 +30,6 @@ CERTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'certs')
 
 
 @pytest.fixture(scope='module')
-def cert_paths():
-    """Фикстура для получения путей к сертификатам."""
-    ca, crt, key = (
-        os.path.join(CERTS_DIR, f)
-        for f in ['ca_root.crt', 'server.crt', 'server.key']
-    )
-    assert all(os.path.exists(p) for p in [ca, crt, key]), "Сертификаты не найдены"
-    return ca, crt, key
-
-
-@pytest.fixture(scope='module')
 def rogue_cert():
     """Фикстура для создания фальшивого сертификата."""
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -68,6 +57,16 @@ def rogue_cert():
 def queues_dir():
     """Фикстура для создания директории очередей."""
     return QueuesDirectory()
+
+@pytest.fixture
+def cert_paths():
+    """Фикстура для получения путей к сертификатам."""
+    ca, crt, key = (
+        os.path.join(CERTS_DIR, f)
+        for f in ['ca_root.crt', 'server.crt', 'server.key']
+    )
+    assert all(os.path.exists(p) for p in [ca, crt, key]), "Сертификаты не найдены"
+    return ca, crt, key
 
 
 @pytest.fixture
@@ -192,11 +191,16 @@ def test_tls_terminator_process_client_hello(tls_terminator, queues_dir):
     except Empty:
         pytest.fail("Не получен ответ на client_hello")
 def test_mission_encryption_decryption(tls_terminator, mission_planner):
-    """Проверка шифрования и дешифрования миссии."""
+    """Исправленный тест шифрования и дешифрования миссии."""
     # Создаем тестовый Fernet-ключ
     key = Fernet.generate_key()
     mission_planner._cipher = Fernet(key)
     tls_terminator._cipher = Fernet(key)
+    
+    # Добавляем hmac_key для обоих объектов
+    test_hmac_key = os.urandom(32)  # Создаем случайный ключ для HMAC
+    mission_planner._hmac_key = test_hmac_key
+    tls_terminator._hmac_key = test_hmac_key
     
     # Создаем тестовую миссию
     test_mission = Mission(
@@ -221,6 +225,124 @@ def test_mission_encryption_decryption(tls_terminator, mission_planner):
     assert decrypted_mission.home.longitude == test_mission.home.longitude
     assert len(decrypted_mission.waypoints) == len(test_mission.waypoints)
     assert decrypted_mission.armed == test_mission.armed
+def test_mitm_attack_detection(tls_terminator, mission_planner):
+    """Тест для проверки обнаружения атак MITM с помощью HMAC."""
+    # Создаем тестовый Fernet-ключ
+    key = Fernet.generate_key()
+    mission_planner._cipher = Fernet(key)
+    tls_terminator._cipher = Fernet(key)
+    
+    # Добавляем hmac_key для обоих объектов
+    test_hmac_key = os.urandom(32)
+    mission_planner._hmac_key = test_hmac_key
+    tls_terminator._hmac_key = test_hmac_key
+    
+    # Создаем тестовую миссию
+    original_mission = Mission(
+        home=Point(latitude=55.7558, longitude=37.6173),
+        waypoints=[Point(latitude=55.7559, longitude=37.6174)],
+        speed_limits=[30],
+        armed=True
+    )
+    
+    # Шифруем миссию
+    encrypted_mission = mission_planner._encrypt_mission(original_mission)
+    
+    # Распаковываем зашифрованную миссию
+    package = pickle.loads(encrypted_mission)
+    encrypted_data = package["encrypted_data"]
+    original_mac = package["mac"]
+    
+    # Имитируем атаку MITM: модифицируем зашифрованные данные
+    # Изменяем несколько байтов в зашифрованных данных
+    tampered_data = bytearray(encrypted_data)
+    tampered_data[10] = (tampered_data[10] + 1) % 256  # Изменяем один байт
+    
+    # Создаем новый пакет с измененными данными, но оригинальным MAC
+    tampered_package = {
+        "encrypted_data": bytes(tampered_data),
+        "mac": original_mac
+    }
+    tampered_encrypted_mission = pickle.dumps(tampered_package)
+    
+    # Пытаемся дешифровать измененные данные - должна возникнуть ошибка
+    with pytest.raises(ValueError, match="MAC verification failed"):
+        tls_terminator._decrypt_mission(tampered_encrypted_mission)
+def test_end_to_end_secure_mission_transfer(queues_dir, cert_paths):
+    """Тест для проверки полного цикла безопасной передачи миссии от планировщика к TLS-терминатору."""
+    # Регистрируем необходимые очереди
+    tls_queue = Queue()
+    planner_queue = Queue()
+    comm_gateway_queue = Queue()  # Добавляем очередь для Communication Gateway
+    
+    queues_dir.register(tls_queue, TLS_TERMINATOR_QUEUE_NAME)
+    queues_dir.register(planner_queue, PLANNER_QUEUE_NAME)
+    queues_dir.register(comm_gateway_queue, COMMUNICATION_GATEWAY_QUEUE_NAME)
+    
+    # Создаем экземпляры TLS-терминатора и планировщика
+    _, crt_path, key_path = cert_paths
+    tls_terminator = TLSTerminator(queues_dir=queues_dir, cert_path=crt_path, key_path=key_path)
+    
+    # Патчим инициализацию SSL для планировщика
+    with patch.object(MissionPlanner, '_initialize_ssl_connection', return_value=None):
+        mission_planner = MissionPlanner(queues_dir=queues_dir)
+    
+    # Имитируем успешную установку TLS-соединения
+    # 1. Устанавливаем шифры
+    key = Fernet.generate_key()
+    mission_planner._cipher = Fernet(key)
+    tls_terminator._cipher = Fernet(key)
+    
+    # 2. Устанавливаем ключи для HMAC
+    test_hmac_key = os.urandom(32)
+    mission_planner._hmac_key = test_hmac_key
+    tls_terminator._hmac_key = test_hmac_key
+    
+    # 3. Устанавливаем флаг соединения
+    mission_planner._ssl_connection_established = True
+    
+    # Создаем тестовую миссию
+    test_mission = Mission(
+        home=Point(latitude=55.7558, longitude=37.6173),
+        waypoints=[Point(latitude=55.7559, longitude=37.6174)],
+        speed_limits=[30],
+        armed=True
+    )
+    
+    # Заменяем original_find_queue на original_get_queue
+    original_get_queue = mission_planner._queues_dir.get_queue
+    
+    def patched_get_queue(queue_name):
+        if queue_name == TLS_TERMINATOR_QUEUE_NAME:
+            return tls_queue
+        elif queue_name == PLANNER_QUEUE_NAME:
+            return planner_queue
+        elif queue_name == COMMUNICATION_GATEWAY_QUEUE_NAME:
+            return comm_gateway_queue
+        return original_get_queue(queue_name)
+    
+    with patch.object(mission_planner._queues_dir, 'get_queue', side_effect=patched_get_queue):
+        # Имитируем установку и пересылку миссии
+        # 1. Планировщик устанавливает миссию
+        mission_planner._set_mission(test_mission)
+        
+        time.sleep(0.1)
+        
+        # 2. Проверяем, что в очередь TLS-терминатора попало событие
+        event = tls_queue.get(timeout=1)
+        assert event.operation == "set_mission"
+        assert event.destination == TLS_TERMINATOR_QUEUE_NAME
+        
+        # 3. Обрабатываем событие в TLS-терминаторе
+        with patch.object(tls_terminator, '_forward_mission_to_communication_gateway') as mock_forward:
+            tls_terminator._process_event(event)
+            mock_forward.assert_called_once()
+
+        # 4. Проверяем прямую обработку зашифрованной миссии
+        decrypted_mission = tls_terminator._decrypt_mission(event.parameters)
+        assert isinstance(decrypted_mission, Mission)
+        assert decrypted_mission.home.latitude == test_mission.home.latitude
+        assert decrypted_mission.home.longitude == test_mission.home.longitude
 def test_full_tls_handshake_simulation():
     """Полная симуляция TLS-рукопожатия с реальным обменом данными."""
     # Создаем директорию очередей
