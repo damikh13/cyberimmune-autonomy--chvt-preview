@@ -36,8 +36,8 @@ def rogue_cert():
     ca_name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, 'Rogue CA')])
     ca_cert = x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)\
         .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())\
-        .not_valid_before(datetime.datetime.now(datetime.UTC))\
-        .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=10))\
+        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))\
+        .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=10))\
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)\
         .sign(ca_key, hashes.SHA256())
 
@@ -45,8 +45,8 @@ def rogue_cert():
     srv_name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, 'my.server.local')])
     srv_cert = x509.CertificateBuilder().subject_name(srv_name).issuer_name(ca_name)\
         .public_key(srv_key.public_key()).serial_number(x509.random_serial_number())\
-        .not_valid_before(datetime.datetime.now(datetime.UTC))\
-        .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=10))\
+        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))\
+        .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=10))\
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)\
         .sign(ca_key, hashes.SHA256())
 
